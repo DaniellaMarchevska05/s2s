@@ -207,6 +207,10 @@ async def process_complete_audio(websocket: WebSocket, session: dict):
     print(f"🔄 Processing audio for session {session_id}")
 
     try:
+        # 🧹 ОЧИСТИТИ ВСІ СТАРІ ФАЙЛИ ПЕРЕД НОВОЮ ВІДПОВІДДЮ
+        print(f"🧹 Cleaning up old audio files...")
+        tts_processor.cleanup_all_files()
+
         # Повідомити що обробляємо
         await manager.send_message(websocket, {
             "type": "processing"

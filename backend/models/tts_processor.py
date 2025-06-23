@@ -26,12 +26,37 @@ class StreamingTTSProcessor:
             self.audio_output_dir = Path(__file__).parent.parent.parent / "audio_output"
 
         self.audio_output_dir.mkdir(exist_ok=True)
-        self.cleanup_old_files()
 
         print(f"📁 Streaming TTS Audio output: {self.audio_output_dir}")
 
+    def cleanup_all_files(self):
+        """🧹 Видалити ВСІ файли з audio_output для економії пам'яті"""
+        try:
+            deleted_count = 0
+            total_size = 0
+
+            # Видалити всі аудіо файли
+            for pattern in ["*.mp3", "*.wav", "*.m4a", "*.ogg"]:
+                for file_path in self.audio_output_dir.glob(pattern):
+                    try:
+                        file_size = file_path.stat().st_size
+                        file_path.unlink()
+                        deleted_count += 1
+                        total_size += file_size
+                        print(f"🗑️ Deleted: {file_path.name}")
+                    except Exception as e:
+                        print(f"⚠️ Could not delete {file_path.name}: {e}")
+
+            if deleted_count > 0:
+                print(f"🧹 Cleanup complete: {deleted_count} files, {total_size / 1024 / 1024:.2f} MB freed")
+            else:
+                print(f"✨ Audio folder already clean")
+
+        except Exception as e:
+            print(f"❌ Cleanup error: {e}")
+
     def cleanup_old_files(self, max_age_hours=1):
-        """Видалити файли старше 1 години"""
+        """Видалити файли старше 1 години (backup метод)"""
         try:
             cutoff_time = time.time() - (max_age_hours * 3600)
 
