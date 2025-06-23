@@ -4,19 +4,21 @@ import asyncio
 from uuid import uuid4
 from pathlib import Path
 from dotenv import load_dotenv
+import time
+import json
 
 load_dotenv()
 
 
-class TTSProcessor:
+class StreamingTTSProcessor:
     def __init__(self, audio_output_dir=None):
         self.api_key = os.getenv("ELEVEN_API_KEY")
         self.voice_id = os.getenv("ELEVEN_VOICE_ID")
 
         if not self.api_key:
-            raise EnvironmentError("ELEVEN_API_KEY is missing. Add it to .env!")
+            raise EnvironmentError("ELEVEN_API_KEY is missing!")
         if not self.voice_id:
-            raise EnvironmentError("ELEVEN_VOICE_ID is missing. Add it to .env!")
+            raise EnvironmentError("ELEVEN_VOICE_ID is missing!")
 
         if audio_output_dir:
             self.audio_output_dir = Path(audio_output_dir)
@@ -24,149 +26,124 @@ class TTSProcessor:
             self.audio_output_dir = Path(__file__).parent.parent.parent / "audio_output"
 
         self.audio_output_dir.mkdir(exist_ok=True)
+        self.cleanup_old_files()
 
-        print(f"TTS Audio output directory: {self.audio_output_dir}")
+        print(f"📁 Streaming TTS Audio output: {self.audio_output_dir}")
 
-    async def process_chunks(self, chunks, session_id):
-        """Process text chunks and return combined audio file path"""
-        output_path = self.audio_output_dir / f"response_{session_id}.mp3"
+    def cleanup_old_files(self, max_age_hours=1):
+        """Видалити файли старше 1 години"""
+        try:
+            cutoff_time = time.time() - (max_age_hours * 3600)
 
-        if output_path.exists():
-            output_path.unlink()
+            for pattern in ["chunk_*.mp3", "temp_*.mp3", "response_*.mp3"]:
+                for file_path in self.audio_output_dir.glob(pattern):
+                    if file_path.stat().st_mtime < cutoff_time:
+                        file_path.unlink()
+                        print(f"🧹 Deleted old file: {file_path.name}")
+        except Exception as e:
+            print(f"⚠️ Cleanup error: {e}")
 
-        temp_files = []
+    async def stream_chunks(self, chunks, session_id, websocket_callback):
+        """
+        Стримінгова обробка чанків - відправляє кожен чанк як тільки готовий
+        """
+        print(f"🎙️ Starting streaming TTS for {len(chunks)} chunks")
 
         try:
-            print(f"Processing {len(chunks)} chunks for TTS")
-
+            # Запустити обробку всіх чанків паралельно
+            tasks = []
             for idx, chunk in enumerate(chunks):
-                print(f"Processing chunk {idx + 1}/{len(chunks)}: {chunk[:50]}...")
+                if chunk.strip():  # Пропустити пусті чанки
+                    task = self._stream_single_chunk(chunk, idx, session_id, websocket_callback)
+                    tasks.append(task)
 
-                if not chunk.strip():
-                    print(f"Skipping empty chunk {idx + 1}")
-                    continue
+            # Дочекатися завершення всіх чанків
+            results = await asyncio.gather(*tasks, return_exceptions=True)
 
-                # Make TTS request
-                response = requests.post(
-                    f"https://api.elevenlabs.io/v1/text-to-speech/{self.voice_id}",
-                    headers={
-                        "xi-api-key": self.api_key,
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "text": chunk,
-                        "model_id": "eleven_monolingual_v1",
-                        "voice_settings": {
-                            "stability": 0.75,
-                            "similarity_boost": 0.85
-                        }
-                    }
-                )
+            # Підрахувати успішні чанки
+            successful_chunks = sum(1 for r in results if r is True)
 
-                if response.status_code != 200:
-                    print(f"TTS API error: {response.status_code}")
-                    print(f"Response: {response.text}")
-                    raise Exception(f"TTS failed: {response.status_code}, {response.text}")
+            # Відправити фінальне повідомлення
+            await websocket_callback({
+                "type": "streaming_complete",
+                "total_chunks": len(chunks),
+                "successful_chunks": successful_chunks
+            })
 
-                # Check if response has content
-                if not response.content:
-                    print(f"Empty response for chunk {idx + 1}")
-                    continue
-
-                # Save temporary file with absolute path
-                temp_path = self.audio_output_dir / f"temp_{uuid4().hex}.mp3"
-
-                try:
-                    with open(temp_path, "wb") as f:
-                        f.write(response.content)
-
-                    # Verify file was created and has content
-                    if not temp_path.exists():
-                        raise Exception(f"Failed to create temp file: {temp_path}")
-
-                    file_size = temp_path.stat().st_size
-                    if file_size == 0:
-                        temp_path.unlink()
-                        raise Exception(f"Temp file is empty: {temp_path}")
-
-                    print(f"Created temp file: {temp_path} ({file_size} bytes)")
-                    temp_files.append(temp_path)
-
-                except Exception as e:
-                    print(f"Error saving temp file: {e}")
-                    if temp_path.exists():
-                        temp_path.unlink()
-                    raise e
-
-            if not temp_files:
-                raise Exception("No audio files were generated")
-
-            # Combine audio files
-            if len(temp_files) == 1:
-                temp_files[0].rename(output_path)
-                print(f"Single file renamed to: {output_path}")
-            else:
-                # Combine multiple files with ffmpeg
-                await self._combine_audio_files(temp_files, output_path)
-
-            # Verify final file
-            if not output_path.exists():
-                raise Exception(f"Final audio file not created: {output_path}")
-
-            final_size = output_path.stat().st_size
-            if final_size == 0:
-                output_path.unlink()
-                raise Exception("Final audio file is empty")
-
-            print(f"Audio saved to: {output_path} ({final_size} bytes)")
-            return str(output_path)
+            print(f"✅ Streaming complete: {successful_chunks}/{len(chunks)} chunks")
+            return successful_chunks > 0
 
         except Exception as e:
-            print(f" TTS Processing error: {e}")
+            print(f"❌ Streaming TTS error: {e}")
+            await websocket_callback({
+                "type": "error",
+                "message": "TTS streaming failed"
+            })
+            return False
 
-            # Clean up temp files on error
-            for temp_path in temp_files:
-                if temp_path.exists():
-                    try:
-                        temp_path.unlink()
-                        print(f" Cleaned up: {temp_path}")
-                    except:
-                        pass
-
-            # Clean up output file if exists and empty
-            if output_path.exists() and output_path.stat().st_size == 0:
-                output_path.unlink()
-
-            raise e
-
-    async def _combine_audio_files(self, temp_files, output_path):
-        """Combine multiple audio files using ffmpeg"""
-        file_list_path = self.audio_output_dir / f"temp_files_{uuid4().hex}.txt"
-
+    async def _stream_single_chunk(self, chunk, index, session_id, websocket_callback):
+        """Обробити і відправити один чанк"""
         try:
-            # Create file list for ffmpeg
-            with open(file_list_path, "w", encoding="utf-8") as f:
-                for temp_path in temp_files:
-                    # Use forward slashes even on Windows for ffmpeg
-                    ffmpeg_path = str(temp_path).replace("\\", "/")
-                    f.write(f"file '{ffmpeg_path}'\n")
+            start_time = time.time()
+            print(f"🔊 Processing chunk {index + 1}: '{chunk[:30]}...'")
 
-            # Combine with ffmpeg
-            ffmpeg_cmd = f'ffmpeg -y -f concat -safe 0 -i "{file_list_path}" -c copy "{output_path}"'
-            print(f" Running ffmpeg: {ffmpeg_cmd}")
+            # TTS запит з найшвидшими налаштуваннями
+            response = requests.post(
+                f"https://api.elevenlabs.io/v1/text-to-speech/{self.voice_id}",
+                headers={
+                    "xi-api-key": self.api_key,
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "text": chunk,
+                    "model_id": "eleven_turbo_v2",  # Найшвидша модель
+                    "voice_settings": {
+                        "stability": 0.4,  # Мінімум для швидкості
+                        "similarity_boost": 0.6,  # Мінімум для швидкості
+                        "style": 0.0,
+                        "use_speaker_boost": False  # Вимкнути для швидкості
+                    }
+                },
+                timeout=8  # Короткий тайм-аут
+            )
 
-            result = os.system(ffmpeg_cmd)
+            if response.status_code != 200:
+                print(f"❌ TTS failed for chunk {index}: {response.status_code}")
+                return False
 
-            if result != 0:
-                raise Exception(f"FFmpeg failed with code: {result}")
+            if not response.content:
+                print(f"❌ Empty response for chunk {index}")
+                return False
 
-            print(f"Files combined successfully")
+            # Зберегти файл
+            chunk_filename = f"chunk_{session_id}_{index:03d}_{int(time.time() * 1000)}.mp3"
+            chunk_path = self.audio_output_dir / chunk_filename
 
-        finally:
-            # Clean up
-            if file_list_path.exists():
-                file_list_path.unlink()
+            with open(chunk_path, "wb") as f:
+                f.write(response.content)
 
-            for temp_path in temp_files:
-                if temp_path.exists():
-                    temp_path.unlink()
+            if chunk_path.stat().st_size == 0:
+                chunk_path.unlink()
+                return False
+
+            process_time = time.time() - start_time
+            print(f"✅ Chunk {index + 1} ready in {process_time:.2f}s ({chunk_path.stat().st_size} bytes)")
+
+            # ОДРАЗУ відправити готовий чанк через WebSocket
+            await websocket_callback({
+                "type": "audio_chunk_ready",
+                "chunk_index": index,
+                "chunk_url": f"/audio/{chunk_filename}",
+                "chunk_text": chunk[:50] + "..." if len(chunk) > 50 else chunk,
+                "process_time": round(process_time, 2)
+            })
+
+            return True
+
+        except Exception as e:
+            print(f"❌ Error processing chunk {index}: {e}")
+            return False
+
+
+# Backward compatibility
+TTSProcessor = StreamingTTSProcessor

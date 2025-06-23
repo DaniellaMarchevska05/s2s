@@ -175,3 +175,28 @@ h1 {
         font-size: 1.8rem;
     }
 }
+
+/* Додати до існуючого CSS */
+
+.main-btn.streaming {
+    background: linear-gradient(45deg, #9C27B0, #673AB7);
+    color: white;
+    animation: pulse 1.5s infinite;
+}
+
+.status.streaming {
+    background: #f3e5f5;
+    color: #7b1fa2;
+}
+
+/* Анімація для streaming */
+@keyframes streamPulse {
+    0% { opacity: 0.8; }
+    50% { opacity: 1; }
+    100% { opacity: 0.8; }
+}
+
+.streaming-indicator {
+    animation: streamPulse 1s infinite;
+}
+

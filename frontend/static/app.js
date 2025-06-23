@@ -6,6 +6,14 @@ class SpeechToSpeechClient {
         this.stream = null;
         this.isConnected = false;
         this.currentState = 'ready';
+        this.recordingTimeout = null;
+
+        // Streaming audio
+        this.audioQueue = [];
+        this.currentAudio = null;
+        this.isPlayingStream = false;
+        this.expectedChunks = 0;
+        this.receivedChunks = 0;
 
         this.initElements();
         this.connect();
@@ -20,10 +28,6 @@ class SpeechToSpeechClient {
         this.responseAudio = document.getElementById('responseAudio');
 
         this.mainBtn.addEventListener('click', () => this.handleMainButtonClick());
-
-        this.responseAudio.addEventListener('ended', () => {
-            this.setState('ready');
-        });
     }
 
     connect() {
@@ -35,7 +39,7 @@ class SpeechToSpeechClient {
         this.socket = new WebSocket(wsUrl);
 
         this.socket.onopen = () => {
-            console.log(' Connected to server');
+            console.log('✅ Connected to server');
             this.isConnected = true;
             this.setState('ready');
         };
@@ -56,7 +60,7 @@ class SpeechToSpeechClient {
         };
 
         this.socket.onerror = (error) => {
-            console.error(' WebSocket error:', error);
+            console.error('❌ WebSocket error:', error);
             this.setState('error', 'Connection error');
         };
     }
@@ -73,6 +77,8 @@ class SpeechToSpeechClient {
             case 'ready':
                 this.btnText.textContent = '🎤 Ask me about cats';
                 this.updateStatus(statusText || 'Ready to chat about cats!', 'ready');
+                this.isPlayingStream = false;
+                this.audioQueue = [];
                 break;
 
             case 'recording':
@@ -89,8 +95,8 @@ class SpeechToSpeechClient {
                 break;
 
             case 'responding':
-                this.btnText.textContent = '🗣️ Response...';
-                this.updateStatus('Playing response...', 'responding');
+                this.btnText.textContent = '🗣️ Streaming...';
+                this.updateStatus('Streaming response...', 'responding');
                 this.mainBtn.disabled = true;
                 break;
 
@@ -98,6 +104,8 @@ class SpeechToSpeechClient {
                 this.btnText.textContent = '❌ Error';
                 this.updateStatus(statusText || 'Something went wrong', 'error');
                 this.mainBtn.disabled = false;
+                this.isPlayingStream = false;
+                this.audioQueue = [];
                 break;
         }
     }
@@ -155,6 +163,14 @@ class SpeechToSpeechClient {
                 }
             };
 
+            // Додати тайм-аут запису (15 секунд)
+            this.recordingTimeout = setTimeout(() => {
+                if (this.currentState === 'recording') {
+                    console.log('⏱️ Recording timeout');
+                    this.socket.send(JSON.stringify({ type: 'stop_recording' }));
+                }
+            }, 15000);
+
             // Start recording
             this.setState('recording');
             this.socket.send(JSON.stringify({ type: 'start_recording' }));
@@ -166,6 +182,12 @@ class SpeechToSpeechClient {
     }
 
     stopRecording() {
+        // Очистити тайм-аут
+        if (this.recordingTimeout) {
+            clearTimeout(this.recordingTimeout);
+            this.recordingTimeout = null;
+        }
+
         if (this.stream) {
             this.stream.getTracks().forEach(track => track.stop());
             this.stream = null;
@@ -188,7 +210,6 @@ class SpeechToSpeechClient {
                 break;
 
             case 'recording_started':
-                // Already handled in setState
                 break;
 
             case 'processing':
@@ -196,16 +217,29 @@ class SpeechToSpeechClient {
                 this.setState('processing');
                 break;
 
-            case 'audio_ready':
+            case 'streaming_started':
+                console.log(`🎵 Starting stream: ${message.total_chunks} chunks expected`);
+                this.expectedChunks = message.total_chunks;
+                this.receivedChunks = 0;
+                this.audioQueue = [];
                 this.setState('responding');
-                this.playAudio(message.audio_url);
+                break;
+
+            case 'audio_chunk_ready':
+                console.log(`🎵 Chunk ${message.chunk_index + 1} ready (${message.process_time}s)`);
+                this.receivedChunks++;
+                this.handleAudioChunk(message);
+                break;
+
+            case 'streaming_complete':
+                console.log(`✅ Streaming complete: ${message.successful_chunks}/${message.total_chunks}`);
+                this.handleStreamingComplete();
                 break;
 
             case 'error':
                 this.stopRecording();
                 this.setState('error', message.message);
 
-                // Auto-reset after error
                 setTimeout(() => {
                     if (this.currentState === 'error') {
                         this.setState('ready');
@@ -215,22 +249,93 @@ class SpeechToSpeechClient {
         }
     }
 
-    playAudio(audioUrl) {
-        console.log('🔊 Playing audio:', audioUrl);
+    handleAudioChunk(chunkMessage) {
+        const audioUrl = chunkMessage.chunk_url + `?t=${Date.now()}`;
 
-        // Show audio player
-        this.audioPlayer.style.display = 'block';
-
-        // Load and play audio
-        this.responseAudio.src = audioUrl;
-        this.responseAudio.load(); // Force reload to prevent caching issues
-
-        this.responseAudio.play().then(() => {
-            console.log('✅ Audio playing');
-        }).catch(error => {
-            console.error('❌ Error playing audio:', error);
-            this.setState('error', 'Cannot play audio response');
+        // Додати до черги
+        this.audioQueue.push({
+            url: audioUrl,
+            index: chunkMessage.chunk_index,
+            text: chunkMessage.chunk_text
         });
+
+        // Якщо це перший чанк - почати відтворення
+        if (!this.isPlayingStream) {
+            this.playNextChunk();
+        }
+
+        // Оновити статус
+        this.updateStatus(
+            `Playing response... (${this.receivedChunks}/${this.expectedChunks})`,
+            'responding'
+        );
+    }
+
+    async playNextChunk() {
+        if (this.audioQueue.length === 0) {
+            this.isPlayingStream = false;
+            return;
+        }
+
+        this.isPlayingStream = true;
+        const chunk = this.audioQueue.shift();
+
+        console.log(`🔊 Playing chunk ${chunk.index + 1}: "${chunk.text}"`);
+
+        try {
+            // Створити новий аудіо елемент для кожного чанка
+            const audio = new Audio(chunk.url);
+            this.currentAudio = audio;
+
+            // Показати audio player з першим чанком
+            if (chunk.index === 0) {
+                this.audioPlayer.style.display = 'block';
+                this.responseAudio.src = chunk.url;
+            }
+
+            // Обробник завершення чанка
+            audio.addEventListener('ended', () => {
+                console.log(`✅ Chunk ${chunk.index + 1} finished`);
+
+                // Відтворити наступний чанк
+                setTimeout(() => {
+                    this.playNextChunk();
+                }, 100); // Мала пауза між чанками
+            });
+
+            // Обробник помилки
+            audio.addEventListener('error', (e) => {
+                console.error(`❌ Error playing chunk ${chunk.index + 1}:`, e);
+                // Спробувати наступний чанк
+                setTimeout(() => {
+                    this.playNextChunk();
+                }, 100);
+            });
+
+            // Почати відтворення
+            await audio.play();
+
+        } catch (error) {
+            console.error(`❌ Error playing chunk ${chunk.index + 1}:`, error);
+            // Спробувати наступний чанк
+            setTimeout(() => {
+                this.playNextChunk();
+            }, 100);
+        }
+    }
+
+    handleStreamingComplete() {
+        // Дочекатися завершення всіх чанків у черзі
+        const checkComplete = () => {
+            if (this.audioQueue.length === 0 && !this.isPlayingStream) {
+                console.log('🎉 All chunks played');
+                this.setState('ready');
+            } else {
+                setTimeout(checkComplete, 500);
+            }
+        };
+
+        setTimeout(checkComplete, 500);
     }
 
     arrayBufferToBase64(buffer) {
