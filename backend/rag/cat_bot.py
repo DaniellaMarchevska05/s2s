@@ -110,7 +110,7 @@ class CatExpertChat:
 
         try:
             completion = self.client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-4o",
                 messages=messages,
                 temperature=0.5,
                 max_tokens=1024,
@@ -121,7 +121,7 @@ class CatExpertChat:
             # Normalize whitespace in the response text
             response_text = self.normalize_text(response_text)
 
-            print("🤖 LLM raw response:")
+            print(" LLM raw response:")
             print(response_text)
 
             return {

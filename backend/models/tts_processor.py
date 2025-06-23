@@ -1,11 +1,9 @@
 import os
 import requests
 import asyncio
-from uuid import uuid4
 from pathlib import Path
 from dotenv import load_dotenv
 import time
-import json
 
 load_dotenv()
 
@@ -27,15 +25,11 @@ class StreamingTTSProcessor:
 
         self.audio_output_dir.mkdir(exist_ok=True)
 
-        print(f"📁 Streaming TTS Audio output: {self.audio_output_dir}")
-
     def cleanup_all_files(self):
-        """🧹 Видалити ВСІ файли з audio_output для економії пам'яті"""
         try:
             deleted_count = 0
             total_size = 0
 
-            # Видалити всі аудіо файли
             for pattern in ["*.mp3", "*.wav", "*.m4a", "*.ogg"]:
                 for file_path in self.audio_output_dir.glob(pattern):
                     try:
@@ -43,63 +37,44 @@ class StreamingTTSProcessor:
                         file_path.unlink()
                         deleted_count += 1
                         total_size += file_size
-                        print(f"🗑️ Deleted: {file_path.name}")
+                        print(f" Deleted: {file_path.name}")
                     except Exception as e:
-                        print(f"⚠️ Could not delete {file_path.name}: {e}")
+                        print(f" Could not delete {file_path.name}: {e}")
 
             if deleted_count > 0:
-                print(f"🧹 Cleanup complete: {deleted_count} files, {total_size / 1024 / 1024:.2f} MB freed")
+                print(f" Cleanup complete: {deleted_count} files, {total_size / 1024 / 1024:.2f} MB freed")
             else:
-                print(f"✨ Audio folder already clean")
+                print(f" Audio folder already clean")
 
         except Exception as e:
-            print(f"❌ Cleanup error: {e}")
+            print(f" Cleanup error: {e}")
 
-    def cleanup_old_files(self, max_age_hours=1):
-        """Видалити файли старше 1 години (backup метод)"""
-        try:
-            cutoff_time = time.time() - (max_age_hours * 3600)
-
-            for pattern in ["chunk_*.mp3", "temp_*.mp3", "response_*.mp3"]:
-                for file_path in self.audio_output_dir.glob(pattern):
-                    if file_path.stat().st_mtime < cutoff_time:
-                        file_path.unlink()
-                        print(f"🧹 Deleted old file: {file_path.name}")
-        except Exception as e:
-            print(f"⚠️ Cleanup error: {e}")
 
     async def stream_chunks(self, chunks, session_id, websocket_callback):
-        """
-        Стримінгова обробка чанків - відправляє кожен чанк як тільки готовий
-        """
-        print(f"🎙️ Starting streaming TTS for {len(chunks)} chunks")
+        print(f" Starting streaming TTS for {len(chunks)} chunks")
 
         try:
-            # Запустити обробку всіх чанків паралельно
             tasks = []
             for idx, chunk in enumerate(chunks):
-                if chunk.strip():  # Пропустити пусті чанки
+                if chunk.strip():
                     task = self._stream_single_chunk(chunk, idx, session_id, websocket_callback)
                     tasks.append(task)
 
-            # Дочекатися завершення всіх чанків
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
-            # Підрахувати успішні чанки
             successful_chunks = sum(1 for r in results if r is True)
 
-            # Відправити фінальне повідомлення
             await websocket_callback({
                 "type": "streaming_complete",
                 "total_chunks": len(chunks),
                 "successful_chunks": successful_chunks
             })
 
-            print(f"✅ Streaming complete: {successful_chunks}/{len(chunks)} chunks")
+            print(f" Streaming complete: {successful_chunks}/{len(chunks)} chunks")
             return successful_chunks > 0
 
         except Exception as e:
-            print(f"❌ Streaming TTS error: {e}")
+            print(f" Streaming TTS error: {e}")
             await websocket_callback({
                 "type": "error",
                 "message": "TTS streaming failed"
@@ -107,12 +82,10 @@ class StreamingTTSProcessor:
             return False
 
     async def _stream_single_chunk(self, chunk, index, session_id, websocket_callback):
-        """Обробити і відправити один чанк"""
         try:
             start_time = time.time()
-            print(f"🔊 Processing chunk {index + 1}: '{chunk[:30]}...'")
+            print(f" Processing chunk {index + 1}: '{chunk[:30]}...'")
 
-            # TTS запит з найшвидшими налаштуваннями
             response = requests.post(
                 f"https://api.elevenlabs.io/v1/text-to-speech/{self.voice_id}",
                 headers={
@@ -121,26 +94,25 @@ class StreamingTTSProcessor:
                 },
                 json={
                     "text": chunk,
-                    "model_id": "eleven_turbo_v2",  # Найшвидша модель
+                    "model_id": "eleven_turbo_v2",
                     "voice_settings": {
-                        "stability": 0.4,  # Мінімум для швидкості
-                        "similarity_boost": 0.6,  # Мінімум для швидкості
+                        "stability": 0.7,
+                        "similarity_boost": 0.7,
                         "style": 0.0,
-                        "use_speaker_boost": False  # Вимкнути для швидкості
+                        "use_speaker_boost": False
                     }
                 },
-                timeout=8  # Короткий тайм-аут
+                timeout=8
             )
 
             if response.status_code != 200:
-                print(f"❌ TTS failed for chunk {index}: {response.status_code}")
+                print(f" TTS failed for chunk {index}: {response.status_code}")
                 return False
 
             if not response.content:
-                print(f"❌ Empty response for chunk {index}")
+                print(f" Empty response for chunk {index}")
                 return False
 
-            # Зберегти файл
             chunk_filename = f"chunk_{session_id}_{index:03d}_{int(time.time() * 1000)}.mp3"
             chunk_path = self.audio_output_dir / chunk_filename
 
@@ -152,9 +124,8 @@ class StreamingTTSProcessor:
                 return False
 
             process_time = time.time() - start_time
-            print(f"✅ Chunk {index + 1} ready in {process_time:.2f}s ({chunk_path.stat().st_size} bytes)")
+            print(f" Chunk {index + 1} ready in {process_time:.2f}s ({chunk_path.stat().st_size} bytes)")
 
-            # ОДРАЗУ відправити готовий чанк через WebSocket
             await websocket_callback({
                 "type": "audio_chunk_ready",
                 "chunk_index": index,
@@ -166,9 +137,8 @@ class StreamingTTSProcessor:
             return True
 
         except Exception as e:
-            print(f"❌ Error processing chunk {index}: {e}")
+            print(f" Error processing chunk {index}: {e}")
             return False
 
 
-# Backward compatibility
 TTSProcessor = StreamingTTSProcessor

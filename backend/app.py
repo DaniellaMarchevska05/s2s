@@ -1,5 +1,3 @@
-import asyncio
-import os
 import uuid
 from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -21,18 +19,14 @@ load_dotenv()
 
 app = FastAPI(title="Speech-to-Speech System")
 
-# Отримати абсолютний шлях до проекту
 PROJECT_ROOT = Path(__file__).parent.parent
 AUDIO_OUTPUT_DIR = PROJECT_ROOT / "audio_output"
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
 
-# Створити необхідні папки
 AUDIO_OUTPUT_DIR.mkdir(exist_ok=True)
 
-# Mount static files
 app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR / "static")), name="static")
 
-# Initialize services
 transcription_service = TranscriptionService()
 tts_processor = StreamingTTSProcessor(audio_output_dir=str(AUDIO_OUTPUT_DIR))
 cat_bot = CatExpertChat()
@@ -46,7 +40,6 @@ class ConnectionManager:
         await websocket.accept()
         session_id = str(uuid.uuid4())
 
-        # Створюємо новий VAD процесор для кожної сесії
         vad_processor = VADProcessor()
 
         self.active_connections[websocket] = {
@@ -58,7 +51,7 @@ class ConnectionManager:
             "connected_at": time.time()
         }
 
-        print(f"🔗 New WebSocket connection: {session_id}")
+        print(f" New WebSocket connection: {session_id}")
         return session_id
 
     def disconnect(self, websocket: WebSocket):
@@ -66,7 +59,7 @@ class ConnectionManager:
             session_id = self.active_connections[websocket]["session_id"]
             self.active_connections[websocket]["is_connected"] = False
             del self.active_connections[websocket]
-            print(f"❌ WebSocket disconnected: {session_id}")
+            print(f" WebSocket disconnected: {session_id}")
 
     async def send_message(self, websocket: WebSocket, message: dict):
         try:
@@ -75,7 +68,7 @@ class ConnectionManager:
                 await websocket.send_text(json.dumps(message))
                 return True
         except Exception as e:
-            print(f"❌ Error sending message: {e}")
+            print(f" Error sending message: {e}")
             self.disconnect(websocket)
             return False
 
@@ -103,14 +96,12 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         session_id = await manager.connect(websocket)
 
-        # Відправити привітання
         await manager.send_message(websocket, {
             "type": "connected",
             "session_id": session_id,
             "message": "Ready to record"
         })
 
-        # Основний цикл обробки повідомлень
         while True:
             session = manager.get_session(websocket)
             if not session or not session["is_connected"]:
@@ -120,29 +111,26 @@ async def websocket_endpoint(websocket: WebSocket):
                 data = await websocket.receive_text()
                 message = json.loads(data)
 
-                print(f"📨 Message: {message.get('type')} from {session_id}")
 
-                # Обробити повідомлення
                 await handle_message(websocket, message)
 
             except WebSocketDisconnect:
-                print(f"🔌 WebSocket disconnect: {session_id}")
+                print(f" WebSocket disconnect: {session_id}")
                 break
             except json.JSONDecodeError as e:
-                print(f"❌ JSON decode error: {e}")
+                print(f" JSON decode error: {e}")
                 break
             except Exception as e:
-                print(f"❌ Unexpected error: {e}")
+                print(f" Unexpected error: {e}")
                 break
 
     except Exception as e:
-        print(f"❌ WebSocket endpoint error: {e}")
+        print(f" WebSocket endpoint error: {e}")
     finally:
         manager.disconnect(websocket)
 
 
 async def handle_message(websocket: WebSocket, message: dict):
-    """Обробка повідомлень"""
     session = manager.get_session(websocket)
     if not session or not session["is_connected"]:
         return
@@ -153,7 +141,7 @@ async def handle_message(websocket: WebSocket, message: dict):
         await handle_audio_chunk(websocket, message, session)
 
     elif message_type == "start_recording":
-        print(f"🎤 Starting recording for session {session['session_id']}")
+        print(f" Starting recording for session {session['session_id']}")
         session["is_recording"] = True
         session["audio_buffer"] = []
         session["vad_processor"].reset()
@@ -163,18 +151,16 @@ async def handle_message(websocket: WebSocket, message: dict):
         })
 
     elif message_type == "stop_recording":
-        print(f"⏹️ Manual stop recording for session {session['session_id']}")
+        print(f" Manual stop recording for session {session['session_id']}")
         session["is_recording"] = False
         await process_complete_audio(websocket, session)
 
 
 async def handle_audio_chunk(websocket: WebSocket, message: dict, session: dict):
-    """Обробка аудіо чанку"""
     if not session["is_recording"]:
         return
 
     try:
-        # Decode base64 audio data
         audio_data = base64.b64decode(message["data"])
         audio_array = np.frombuffer(audio_data, dtype=np.float32)
 
@@ -186,16 +172,15 @@ async def handle_audio_chunk(websocket: WebSocket, message: dict, session: dict)
         is_speech = vad.process_chunk(audio_array)
 
         if vad.should_stop_recording():
-            print(f"🛑 VAD detected end of speech for {session['session_id']}")
+            print(f" VAD detected end of speech for {session['session_id']}")
             session["is_recording"] = False
             await process_complete_audio(websocket, session)
 
     except Exception as e:
-        print(f"❌ Error processing audio chunk: {e}")
+        print(f" Error processing audio chunk: {e}")
 
 
 async def process_complete_audio(websocket: WebSocket, session: dict):
-    """Обробка завершеного аудіо з streaming TTS"""
     if not session["audio_buffer"]:
         await manager.send_message(websocket, {
             "type": "error",
@@ -204,14 +189,11 @@ async def process_complete_audio(websocket: WebSocket, session: dict):
         return
 
     session_id = session["session_id"]
-    print(f"🔄 Processing audio for session {session_id}")
+    print(f" Processing audio for session {session_id}")
 
     try:
-        # 🧹 ОЧИСТИТИ ВСІ СТАРІ ФАЙЛИ ПЕРЕД НОВОЮ ВІДПОВІДДЮ
-        print(f"🧹 Cleaning up old audio files...")
         tts_processor.cleanup_all_files()
 
-        # Повідомити що обробляємо
         await manager.send_message(websocket, {
             "type": "processing"
         })
@@ -229,9 +211,8 @@ async def process_complete_audio(websocket: WebSocket, session: dict):
             })
             return
 
-        print(f"📝 Transcription: {transcription}")
+        print(f" Transcription: {transcription}")
 
-        # Перевірка довжини
         if len(transcription.split()) > 30:
             await manager.send_message(websocket, {
                 "type": "error",
@@ -250,19 +231,16 @@ async def process_complete_audio(websocket: WebSocket, session: dict):
             })
             return
 
-        print(f"🤖 Generated {len(chunks)} chunks for streaming")
+        print(f" Generated {len(chunks)} chunks for streaming")
 
-        # Повідомити що починаємо streaming
         await manager.send_message(websocket, {
             "type": "streaming_started",
             "total_chunks": len(chunks)
         })
 
-        # Функція callback для відправки через WebSocket
         async def websocket_callback(message):
             await manager.send_message(websocket, message)
 
-        # Запустити streaming TTS
         success = await tts_processor.stream_chunks(chunks, session_id, websocket_callback)
 
         if not success:
@@ -272,7 +250,7 @@ async def process_complete_audio(websocket: WebSocket, session: dict):
             })
 
     except Exception as e:
-        print(f"❌ Error in process_complete_audio: {e}")
+        print(f" Error in process_complete_audio: {e}")
         print(traceback.format_exc())
         await manager.send_message(websocket, {
             "type": "error",
@@ -300,17 +278,6 @@ async def get_audio_file(filename: str):
 if __name__ == "__main__":
     import uvicorn
 
-    print(f"📁 Audio output: {AUDIO_OUTPUT_DIR}")
+    print(f" Starting server on http://localhost:8000")
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
 
-    # Спробувати кілька портів
-    for port in [8000, 8001, 8002, 8003]:
-        try:
-            print(f"🚀 Starting server on http://localhost:{port}")
-            uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
-            break
-        except OSError as e:
-            if "10048" in str(e):
-                print(f"❌ Port {port} is busy, trying next...")
-                continue
-            else:
-                raise e

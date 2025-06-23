@@ -1,6 +1,5 @@
 import os
 import tempfile
-import numpy as np
 import soundfile as sf
 from openai import OpenAI
 from dotenv import load_dotenv

@@ -163,7 +163,6 @@ class SpeechToSpeechClient {
                 }
             };
 
-            // Додати тайм-аут запису (15 секунд)
             this.recordingTimeout = setTimeout(() => {
                 if (this.currentState === 'recording') {
                     console.log('⏱️ Recording timeout');
@@ -182,7 +181,6 @@ class SpeechToSpeechClient {
     }
 
     stopRecording() {
-        // Очистити тайм-аут
         if (this.recordingTimeout) {
             clearTimeout(this.recordingTimeout);
             this.recordingTimeout = null;
@@ -202,11 +200,11 @@ class SpeechToSpeechClient {
     }
 
     handleMessage(message) {
-        console.log('📨 Received:', message.type);
+        console.log(' Received:', message.type);
 
         switch (message.type) {
             case 'connected':
-                console.log('🔗 Connected with session:', message.session_id);
+                console.log(' Connected with session:', message.session_id);
                 break;
 
             case 'recording_started':
@@ -252,19 +250,16 @@ class SpeechToSpeechClient {
     handleAudioChunk(chunkMessage) {
         const audioUrl = chunkMessage.chunk_url + `?t=${Date.now()}`;
 
-        // Додати до черги
         this.audioQueue.push({
             url: audioUrl,
             index: chunkMessage.chunk_index,
             text: chunkMessage.chunk_text
         });
 
-        // Якщо це перший чанк - почати відтворення
         if (!this.isPlayingStream) {
             this.playNextChunk();
         }
 
-        // Оновити статус
         this.updateStatus(
             `Playing response... (${this.receivedChunks}/${this.expectedChunks})`,
             'responding'
@@ -283,41 +278,33 @@ class SpeechToSpeechClient {
         console.log(`🔊 Playing chunk ${chunk.index + 1}: "${chunk.text}"`);
 
         try {
-            // Створити новий аудіо елемент для кожного чанка
             const audio = new Audio(chunk.url);
             this.currentAudio = audio;
 
-            // Показати audio player з першим чанком
             if (chunk.index === 0) {
                 this.audioPlayer.style.display = 'block';
                 this.responseAudio.src = chunk.url;
             }
 
-            // Обробник завершення чанка
             audio.addEventListener('ended', () => {
                 console.log(`✅ Chunk ${chunk.index + 1} finished`);
 
-                // Відтворити наступний чанк
-                setTimeout(() => {
-                    this.playNextChunk();
-                }, 100); // Мала пауза між чанками
-            });
-
-            // Обробник помилки
-            audio.addEventListener('error', (e) => {
-                console.error(`❌ Error playing chunk ${chunk.index + 1}:`, e);
-                // Спробувати наступний чанк
                 setTimeout(() => {
                     this.playNextChunk();
                 }, 100);
             });
 
-            // Почати відтворення
+            audio.addEventListener('error', (e) => {
+                console.error(`❌ Error playing chunk ${chunk.index + 1}:`, e);
+                setTimeout(() => {
+                    this.playNextChunk();
+                }, 100);
+            });
+
             await audio.play();
 
         } catch (error) {
             console.error(`❌ Error playing chunk ${chunk.index + 1}:`, error);
-            // Спробувати наступний чанк
             setTimeout(() => {
                 this.playNextChunk();
             }, 100);
@@ -325,10 +312,9 @@ class SpeechToSpeechClient {
     }
 
     handleStreamingComplete() {
-        // Дочекатися завершення всіх чанків у черзі
         const checkComplete = () => {
             if (this.audioQueue.length === 0 && !this.isPlayingStream) {
-                console.log('🎉 All chunks played');
+                console.log(' All chunks played');
                 this.setState('ready');
             } else {
                 setTimeout(checkComplete, 500);
