@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Speech-to-Speech Cat Expert</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>🐱 Cat Expert Voice Chat</h1>
+
+        <div class="main-control">
+            <button id="mainBtn" class="main-btn start">
+                <span class="btn-text">🎤 Start Recording</span>
+                <div class="spinner" style="display: none;"></div>
+            </button>
+        </div>
+
+        <div class="status" id="status">Ready to chat about cats!</div>
+
+        <div class="audio-player" id="audioPlayer" style="display: none;">
+            <audio controls id="responseAudio"></audio>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

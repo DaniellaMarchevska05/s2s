@@ -1,0 +1,29 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+websockets = "*"
+numpy = "*"
+pydub = "*"
+requests = "*"
+pyaudio = "*"
+openai = "*"
+soundfile = "*"
+elevenlabs = "==0.2.27"
+sounddevice = "*"
+scipy = "*"
+dotenv = "*"
+llama-index = "*"
+chromadb = "*"
+llama-index-embeddings-huggingface = "*"
+llama-index-llms-groq = "*"
+llama-index-vector-stores-chroma = "*"
+fastapi = "*"
+
+[dev-packages]
+
+[requires]
+python_version = "3.12"
+python_full_version = "3.12.10"
